@@ -3,9 +3,10 @@ Main Respiration class.
 """
 import logging
 import numpy as np
+import pandas as pd
 
-from spyro.detection import get_inhales_exhales
-from spyro.preprocessing import smooth, correct_baseline
+from spyro.detection import get_respiratory_extrema
+from spyro.preprocessing import clean_signal
 from spyro.utils import moving_average, validate_common_args
 
 logger = logging.getLogger("spyro")
@@ -62,11 +63,12 @@ class Respiration:
         time = np.arange(len(data)) / sfreq
 
         # Signal preprocessing.
-        data_smooth = smooth(data, sfreq, window_size=species)
-        data_corrected = correct_baseline(data_smooth, sfreq, window_size=60, zscore=False)
+        data_corrected = clean_signal(
+            data, sfreq, pad_mode="reflect", smoothing_window=species, detrending_window=60, zscore=False
+        )
 
         # Feature detection.
-        inhales, exhales = get_inhales_exhales(
+        inhales, exhales = get_respiratory_extrema(
             data=data_corrected, sfreq=sfreq, device=device, window_sizes=species, decision_threshold="elbow",
         )
 
@@ -76,7 +78,6 @@ class Respiration:
         self._device = device
         self._time = time
         self._data_raw = data
-        self._data_smooth = data_smooth
         self._data_corrected = data_corrected
         self._inhales = inhales
         self._exhales = exhales
@@ -115,3 +116,22 @@ class Respiration:
     def exhales(self):
         """The index (i.e., sample number) of exhalation troughs."""
         return self._exhales
+
+    def to_dataframe(self):
+        """Return a dataframe.
+
+        Returns
+        -------
+        df : :py:class:`pandas.DataFrame`
+            A pandas Dataframe with ...
+        """
+        data = {
+            "time": self.time,
+            "raw": self._data_raw,
+            "smooth": self.data_smooth,
+            "data": self.data_corrected,
+        }
+        df = pd.DataFrame(data).rename_axis("sample")
+        df["inhale_peak"] = df.index.isin(self.inhales)
+        df["exhale_peak"] = df.index.isin(self.exhales)
+        return df

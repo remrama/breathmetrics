@@ -8,3 +8,10 @@ Some things spyro offers:
 * identifying inhalation/exhalation onsets, peaks, and offsets
 * identifying brief pauses in breathing
 * visualizing respiratory data
+
+
+## Related projects
+
+* [BreathMetrics](https://github.com/zelanolab/breathmetrics)
+* [RespInPeace](https://github.com/mwlodarczak/RespInPeace)
+* [NeuroKit](https://github.com/neuropsychology/NeuroKit)

@@ -7,16 +7,28 @@ from spyro.utils import assert_alternating, assert_monotonic_increasing, assert_
 logger = logging.getLogger("spyro")
 
 __all__ = [
-    "get_inhales_exhales",
+    "get_respiratory_extrema",
 ]
 
 
-def get_inhales_exhales(data, sfreq, *, device, window_sizes=None, decision_threshold="elbow"):
+def get_respiratory_extrema(data, sfreq, *, device, window_sizes=None, decision_threshold="elbow"):
     """
-    Estimate peaks and troughs in respiratory data.
+    Estimate peaks and troughs of inhales and exhales.
 
     Accounts for ``species``-specific respiration rates using different window sizes and peak/trough
     interpretation across different ``device`` measurements [Noto2018]_.
+
+    See Figure 2 of [Noto2018]_.
+
+    1. Choose sliding window sizes.
+    2. Choose sliding window offsets.
+    3. Choose inhale/exhale thresholds (i.e., n_stds to be identified as extremum).
+    4. Apply padding.
+    5. Tally detected inhale/exhale extrema using each sliding window (and offsets).
+    6. Identify PWCT algorithmically (optional).
+    7. Apply PWCT to identify inhale/exhale extrema.
+    8. Apply corrections to ensure alternating and paired inhales/exhales.
+    9. Remove padding.
 
     .. note::
         The extrema (max/min, or peaks/troughs) are interpreted differently across devices.
@@ -45,11 +57,13 @@ def get_inhales_exhales(data, sfreq, *, device, window_sizes=None, decision_thre
         The device name of ``data``.
     window_sizes : list or :py:class:`numpy.ndarray` or None
         A sequence of integers to use for window sizes (TODO: explain more).
+        Units are seconds.
         If a string, must be one of ``'human'`` or ``'rodent'``, and default window sizes are
         applied (see BreathMetrics [Noto2018]_).
     decision_threshold : int or str
         Determines the number of extrema required for a sample to be considered a peak or trough.
         TODO: Expand.
+        AKA Percent Window Consensus Threshold (PWCT) in the paper?
 
     Returns
     -------
@@ -65,7 +79,16 @@ def get_inhales_exhales(data, sfreq, *, device, window_sizes=None, decision_thre
                   signal processing toolbox. Chemical Senses, 43(8), 583-597.
                   https://doi.org/10.1093/chemse/bjy045
     """
-    species_windows = {"human": [100, 300, 700, 1000, 5000], "rodent": [5, 10, 20, 50]}
+    # Q: Article says 300, 500, 700, 1000, and 5000
+    #    Toolbox says 100, 300, 700, 1000, and 5000
+    species_windows = {"human": [0.1, 0.3, 0.7, 1, 5], "rodent": [0.005, 0.010, 0.020, 0.050]}
+
+    # Select window shifts.
+    # Shifting/offsetting window to be unbiased by starting point.
+    # TODO: I think windows get shifted and then averaged together?
+    # TODO: Is this the same as the description in paper (ie, 33/66)?
+    # TODO: Parameterize as keyword argument.
+    offset_divisors = [1, 2, 3]
 
     # Validate input.
     validate_common_args(data=data, sfreq=sfreq, device=device)
@@ -82,9 +105,8 @@ def get_inhales_exhales(data, sfreq, *, device, window_sizes=None, decision_thre
         window_sizes = species_windows[window_sizes]
 
     # Convert windows sizes from seconds to n_samples.
-    # TODO: Check units here -- is it really seconds?
-    #       Also I think window_size might be doubled for each iteration below?
-    window_sizes = [ np.floor(sfreq / 1000 * w).astype(int) for w in window_sizes ]
+    # Q: I think window_size might be doubled for each iteration below?
+    window_sizes = [ np.floor(sfreq * w).astype(int) for w in window_sizes ]
 
     ############################################################################
     # Find maxima/minima in multiple shifted version of each sliding window
@@ -103,6 +125,7 @@ def get_inhales_exhales(data, sfreq, *, device, window_sizes=None, decision_thre
     # Smallest between respiration size and the largest window
     # TODO: I think it's *2 because window size is mirrored?
     n_pad = min([n_samples, largest_window * 2])
+    # TODO: change to np.pad(mode="reflect or symmetry")
     data_padded = np.concatenate([data, np.flip(data[-n_pad:])])
     # data_padded = np.pad(resp, (0, data.size))
 
@@ -117,13 +140,6 @@ def get_inhales_exhales(data, sfreq, *, device, window_sizes=None, decision_thre
     peak_threshold = data.mean() + data.std(ddof=1)
     trough_threshold = -1 * peak_threshold
 
-    # Select window shifts.
-    # Shifting/offsetting window to be unbiased by starting point.
-    # TODO: I think windows get shifted and then averaged together?
-    # TODO: Is this the same as the description in paper (ie, 33/66)?
-    # TODO: Parameterize as keyword argument.
-    offset_divisors = [1, 2, 3]
-
     # In each sliding window (and each shift within sliding window), return peaks agreed upon by majority windows.
     # Find extrema in each window of the data using each `window_sizes` and `offset_divisors`.
     indices = np.arange(len(data_padded))
@@ -136,7 +152,7 @@ def get_inhales_exhales(data, sfreq, *, device, window_sizes=None, decision_thre
             # Split data into most possible chunks
             # TODO: If checking size, is custom function necessary? Or use np.array_split?
             # data_chunks = [ c for c in split_relaxed(indices[start_idx:], wsize) if c.size == wsize ]
-            n_samples = len(lagged_start := indices[start_idx:].copy())
+            n_samples = len(lagged_start := indices[start_idx:])
             n_chunks, n_leftover = divmod(n_samples, wsize)
             chunks = np.array_split(lagged_start[:-n_leftover], n_chunks)
             # Check it there is a legitimate peak and/or trough in each chunk.
@@ -271,3 +287,4 @@ def get_inhales_exhales(data, sfreq, *, device, window_sizes=None, decision_thre
     assert_alternating(inhales, exhales)
 
     return inhales, exhales
+
